@@ -1,7 +1,7 @@
 # ESPHOME的external components
 ---
 ## xiaomi_lock
-小米智能门锁的状态，需要mac地址和bindkey，具体获得方法请访问bbs.hassbian.com  
+蓝牙BLE获取小米智能门锁的状态，需要mac地址和bindkey，具体获得方法请访问bbs.hassbian.com  
 yaml格式：
 ```
 external_components:
