@@ -2,6 +2,7 @@
 ---
 ## xiaomi_lock
 蓝牙BLE获取小米智能门锁的状态，需要mac地址和bindkey，具体获得方法请访问bbs.hassbian.com  
+<img src="images/xiaomilock.jpg" alt="drawing" width="50%"/>
 yaml格式：
 ```
 external_components:
