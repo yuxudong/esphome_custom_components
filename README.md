@@ -16,12 +16,20 @@ sensor:
     mac_address: 'xx:xx:xx:xx:xx:xx'
     bindkey: '000102030405060708090a0b0c0d0e0f'
     lockevt:
+      name: "Dongshan LockEvt"
     lockevtts:
+      name: "Dongshan LockEvtTS"
     doorevt:
+      name: "Dongshan DoorEvt"
     doorevtts:
+      name: "Dongshan DoorEvtTS"
     battlvl:
+      name: "Dongshan BatteryLevel"
     battlvlts:
+      name: "Dongshan BatteryLevelTS"
     bioevt:
+      name: "Dongshan BIOEvent"
     keyid:
+      name: "KeyID"
 ```
     
