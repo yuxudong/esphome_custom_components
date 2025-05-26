@@ -24,4 +24,28 @@ sensor:
     bioevt:
     keyid:
 ```
+
+## tds
+购自https://item.taobao.com/item.htm?id=611035894936 指令见宝贝详情    
+声明本人与该模块无任何商业联系，存在自己需要买了模块然后写了esphome的组件    
+yaml格式：    
+```    
+external_components:
+  - source:
+      type: git
+      url: https://github.com/yuxudong/esphome_custom_components
+    components: [ tds ] 
+sensor:
+  - platform: tds
+    send_interval: 1000000
+    inputTemperature:
+      name: "input Temperature"
+    outputTemperature:
+      name: "output Temperature"
+    inputTDS:
+      name: "input TDS"
+    outputTDS:
+      name: "output TDS"
+
+```    
     
