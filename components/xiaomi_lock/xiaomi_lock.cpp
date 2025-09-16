@@ -356,7 +356,7 @@ bool MiBeacon::parse_xiaomi_value(uint8_t value_type, const uint8_t *data, uint8
     auto it = KeyIDMap.find(keyid);
     result.keyid = (it == KeyIDMap.end()) ? findOperator(keyid) : it->second;
     ESP_LOGD(TAG, "  KeyID: %s", result.keyid.c_str());
-    et.from_epoch_local(encode_uint32(data[9], data[8], data[7], data[6]));
+    et=ESPTime::from_epoch_local(encode_uint32(data[9], data[8], data[7], data[6]));
     ESP_LOGD(TAG, "  LockEvtTime: %s",et.strftime("%Y-%m-%d %H:%M:%S").c_str());
     ESP_LOGD(TAG, "  LockEvt: %s", str_upper_case(format_hex(std::vector<uint8_t>{data[1]})).c_str());
     //result.lockevt = str_upper_case(format_hex(std::vector<uint8_t>{data[1]}));
@@ -369,7 +369,7 @@ bool MiBeacon::parse_xiaomi_value(uint8_t value_type, const uint8_t *data, uint8
     auto it = KeyIDMap.find(keyid);
     result.keyid = (it == KeyIDMap.end()) ? findOperator(keyid) : it->second;
     ESP_LOGD(TAG, "  KeyID: %s", result.keyid.c_str());
-    et.from_epoch_local(encode_uint32(data[8], data[7], data[6], data[5]));
+    et=ESPTime::from_epoch_local(encode_uint32(data[8], data[7], data[6], data[5]));
     ESP_LOGD(TAG, "  LockEvtTime: %s",et.strftime("%Y-%m-%d %H:%M:%S").c_str());
     ESP_LOGD(TAG, "  LockEvt: %s", str_upper_case(format_hex(std::vector<uint8_t>{data[0]})).c_str());
     //result.lockevt = str_upper_case(format_hex(std::vector<uint8_t>{data[0]}));
@@ -378,7 +378,7 @@ bool MiBeacon::parse_xiaomi_value(uint8_t value_type, const uint8_t *data, uint8
   }
   // battery, 5 byte, 8-bit unsigned integer, 1 %，后面为时间戳
   else if ((value_type == 0x0A) && (value_length == 5)) {
-    et.from_epoch_local(encode_uint32(data[4], data[3], data[2], data[1]));
+    et=ESPTime::from_epoch_local(encode_uint32(data[4], data[3], data[2], data[1]));
     ESP_LOGD(TAG, "  BattLevelTime: %s",et.strftime("%Y-%m-%d %H:%M:%S").c_str());
     result.battlvl = data[0];
     result.battlvlts = et.strftime("%Y-%m-%d %H:%M:%S");
@@ -388,7 +388,7 @@ bool MiBeacon::parse_xiaomi_value(uint8_t value_type, const uint8_t *data, uint8
     auto it = DoorEvtMap.find(data[0]);
     result.doorevt = (it == DoorEvtMap.end())? "" : it->second;
     ESP_LOGD(TAG, "  DoorEvt: %s", result.doorevt.c_str());
-    et.from_epoch_local(encode_uint32(data[4], data[3], data[2], data[1]));
+    et=ESPTime::from_epoch_local(encode_uint32(data[4], data[3], data[2], data[1]));
     ESP_LOGD(TAG, "  DoorEvtTime: %s",et.strftime("%Y-%m-%d %H:%M:%S").c_str());
     result.doorevtts = et.strftime("%Y-%m-%d %H:%M:%S");
   }
