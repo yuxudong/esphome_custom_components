@@ -3,6 +3,7 @@
 
 #ifdef USE_ESP32
 #include "mbedtls/ccm.h"
+#include <map>
 
 namespace esphome {
 namespace xiaomi_lock {
