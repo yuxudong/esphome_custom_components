@@ -1,0 +1,68 @@
+# ============================================================
+# xiaomi_lock_ble 组件示例配置（ESPHome 2026.9+，ESP32）
+# ============================================================
+# 实现米家高安全级 BLE 门锁的「连接开锁」：把已跑通的 Python 链路
+# （ECDH/HKDF/AES-CCM + 0x0016 可靠通道 + 0x1001 开锁帧）移植到 ESP32。
+#
+# 关键设计：
+#   - ble_client.auto_connect: false —— 平时维持被动广播扫描，你现有的
+#     xiaomi_lock 广播传感器继续工作；只有点开锁时才短暂连接，发完立即断开。
+#   - LTMK 用 !secret 存放，绝不写进 YAML 明文 / 不提交 git。
+#   - lock 实体：在 HA 里点「开锁 / 上锁 / 打开」即触发对应 BLE 帧。
+#
+# 前置：
+#   1) 用 get_ltmk.py 从自己米家账号取回 LTMK（32B / 64 hex）。
+#   2) 把 MAC、LTMK 填进 secrets.yaml。
+#   3) 首次烧录若门不开（计数器未对齐），用 PC 脚本 --ctr N 试出可用值，
+#      把 ctr_lo/ctr_hi 写进下面配置烧录一次，之后即可删除（组件会 NVS 持久化）。
+# ============================================================
+
+esphome:
+  name: dongshan-lock-ble
+  friendly_name: 东山门锁BLE
+
+substitutions:
+  lock_mac: "FD:20:66:FC:70:53"   # 换成你自己的门锁 MAC
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+ble_client:
+  - mac_address: ${lock_mac}
+    id: mi_lock_client
+    auto_connect: false            # ← 必须 false，否则广播停止、传感器断更
+
+external_components:
+  - source:
+      type: local
+      path: components             # 指向本仓库的 components/ 目录
+
+lock:
+  - platform: xiaomi_lock_ble
+    id: dongshan_lock
+    name: "东山门锁 BLE"
+    ble_client_id: mi_lock_client
+    ltmk: !secret dongshan_ltmk     # secrets.yaml 里: dongshan_ltmk: "64位hex"
+    cmd: unlock                    # 点「开锁」发的命令；unlock/lock/anti_lock
+    # --- 可选调参 ---
+    settle_ms: 150                 # 发新包前给设备处理上一包的时间，设备慢可调 300
+    step_timeout_ms: 12000         # 单步超时
+    auth_timeout_ms: 20000         # 等登录结果超时
+    # ctr_lo: 7                    # 仅首次对齐用；之后删掉，靠 NVS 自动递增
+
+# ---- 你现有的广播解码传感器保持不变，继续工作 ----
+# sensor:
+#   - platform: xiaomi_lock
+#     mac_address: ${lock_mac}
+#     bindkey: !secret dongshan_bindkey
+#     battlvl:
+#       name: "门锁电量"
+
+logger:
+  level: DEBUG                     # 调通后可改 INFO
