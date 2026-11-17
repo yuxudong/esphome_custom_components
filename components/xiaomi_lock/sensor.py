@@ -2,9 +2,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import sensor, text_sensor, esp32_ble_tracker
 from esphome.const import (
-    CONF_BATTERY_LEVEL,
     CONF_MAC_ADDRESS,
-    ICON_EMPTY,
     UNIT_PERCENT,
     CONF_ID,
     CONF_BINDKEY,

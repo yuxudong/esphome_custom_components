@@ -56,7 +56,10 @@ namespace xiaomi_lock {
     public:
       bool parse_xiaomi_value(uint8_t value_type, const uint8_t *data, uint8_t value_length, XiaomiParseResult &result);
       bool parse_xiaomi_message(const std::vector<uint8_t> &message, XiaomiParseResult &result);
-      optional<XiaomiParseResult> parse_xiaomi_header(const esp32_ble_tracker::ServiceData &service_data); 
+      optional<XiaomiParseResult> parse_xiaomi_header(const esp32_ble_tracker::ServiceData &service_data);
+    private:
+      // 去重计数器必须是每个实例独立（原为函数级 static，多门锁实例会互相误判重复帧）。
+      uint8_t last_frame_count_{0};
   };
 
   class XiaomiLock : public Component, public esp32_ble_tracker::ESPBTDeviceListener {

@@ -116,10 +116,10 @@ std::string findOperator(uint32_t keyid) {
   if(keyid >= 0x80060000 && keyid <= 0x8006FFFF) {
     return std::string("BIO-face ") + std::to_string(keyid - 0x80060000);
   }
-  if(keyid >= 0x8007000 && keyid <= 0x8007FFFF) {
+  if(keyid >= 0x80070000 && keyid <= 0x8007FFFF) {
     return std::string("BIO-fingervein") + std::to_string(keyid - 0x80070000);
   }
-  if(keyid >= 0x8008000 && keyid <= 0x8008FFFF) {
+  if(keyid >= 0x80080000 && keyid <= 0x8008FFFF) {
     return std::string("BIO-palmprint") + std::to_string(keyid - 0x80080000);
   }
   return std::string("Error");
@@ -131,7 +131,7 @@ std::string findLockEvt(uint8_t data) {
   auto it1 = LockEvtLBMap.find(LB);
   std::string s1 = (it1 == LockEvtLBMap.end()) ? "Error" : it1->second;
   auto it2 = LockEvtHBMap.find(HB);
-  std::string s2 = (it2 == LockEvtLBMap.end()) ? "Error" : it2->second;
+  std::string s2 = (it2 == LockEvtHBMap.end()) ? "Error" : it2->second;
   return s1 + std::string(" ") + s2;
 }
 
@@ -139,7 +139,12 @@ static const char *const TAG = "xiaomi_lock";
 
 void XiaomiLock::dump_config() {
   ESP_LOGCONFIG(TAG, "Xiaomi Lock");
-  ESP_LOGCONFIG(TAG, "  Bindkey: %s", format_hex_pretty(this->bindkey_, 16).c_str());
+  // 安全：bindkey 是解密广播的长期密钥，不再明文打印到日志（串口日志常被外传）。
+  bool bindkey_set = false;
+  for (uint8_t b : this->bindkey_) {
+    if (b != 0) { bindkey_set = true; break; }
+  }
+  ESP_LOGCONFIG(TAG, "  Bindkey: %s", bindkey_set ? "configured (hidden)" : "NOT CONFIGURED");
   LOG_SENSOR("  ", "BattLvl", this->battlvl_);
   LOG_TEXT_SENSOR("  ", "BattLvlTS", this->battlvlts_);
   LOG_TEXT_SENSOR("  ", "KeyID", this->keyid_);
@@ -158,9 +163,6 @@ bool XiaomiLock::parse_device(const esp32_ble_tracker::ESPBTDevice &device) {
   ESP_LOGVV(TAG, "parse_device(): MAC address %s found.", device.address_str().c_str());
 
   bool success = false;
-  for (auto &service_data : device.get_manufacturer_datas())  {
-
-  }
   for (auto &service_data : device.get_service_datas()) {
     auto res = mi.parse_xiaomi_header(service_data);
     if (!res.has_value()) {
@@ -203,22 +205,21 @@ bool XiaomiLock::parse_device(const esp32_ble_tracker::ESPBTDevice &device) {
 
 void XiaomiLock::set_bindkey(const std::string &bindkey) {
   memset(bindkey_, 0, 16);
-  if (bindkey.size() != 32) {
+  if (bindkey.size() != 32 || !parse_hex(bindkey, bindkey_, 16)) {
+    ESP_LOGE(TAG, "set_bindkey(): invalid bindkey (expected 32 hex chars), ignoring.");
+    memset(bindkey_, 0, 16);
     return;
-  }
-  char temp[3] = {0};
-  for (int i = 0; i < 16; i++) {
-    strncpy(temp, &(bindkey.c_str()[i * 2]), 2);
-    bindkey_[i] = std::strtoul(temp, NULL, 16);
   }
 }
 
 static bool decrypt_xiaomi_message(std::vector<uint8_t> &raw, const uint8_t *bindkey, const uint64_t &address) {
-    /* if (!((raw.size() == 19) || ((raw.size() >= 22) && (raw.size() <= 24)))) {
-    ESP_LOGD(TAG, "decrypt_xiaomi_payload(): data packet has wrong size (%d)!", raw.size());
-    ESP_LOGD(TAG, "  Packet : %s", format_hex_pretty(raw.data(), raw.size()).c_str());
+  // 修复：原 size 检查被整段注释掉，导致 raw.size() < 12 时 datasize = size-12
+  // 下溢成巨大值，memcpy 越界。门锁包长可能不是官方的 19/22-24，故只保留
+  // 本函数实际需要的最短长度保护（datasize/tag/counter 读取要求 >= 12）。
+  if (raw.size() < 12) {
+    ESP_LOGD(TAG, "decrypt_xiaomi_payload(): data packet too short (%d)!", (int) raw.size());
     return false;
-  } */
+  }
 
   uint8_t mac_reverse[6] = {0};
   mac_reverse[5] = (uint8_t)(address >> 40);
@@ -275,7 +276,7 @@ static bool decrypt_xiaomi_message(std::vector<uint8_t> &raw, const uint8_t *bin
     ESP_LOGD(TAG, "decrypt_xiaomi_payload(): authenticated decryption failed.");
     ESP_LOGD(TAG, "  MAC address : %s", format_hex_pretty(mac_address, 6).c_str());
     ESP_LOGD(TAG, "       Packet : %s", format_hex_pretty(raw.data(), raw.size()).c_str());
-    ESP_LOGD(TAG, "          Key : %s", format_hex_pretty(vector.key, vector.keysize).c_str());
+    // 安全：不打印 bindkey（vector.key），避免密钥进入串口/系统日志。
     ESP_LOGD(TAG, "           Iv : %s", format_hex_pretty(vector.iv, vector.ivsize).c_str());
     ESP_LOGD(TAG, "       Cipher : %s", format_hex_pretty(vector.ciphertext, vector.datasize).c_str());
     ESP_LOGD(TAG, "          Tag : %s", format_hex_pretty(vector.tag, vector.tagsize).c_str());
@@ -308,6 +309,11 @@ optional<XiaomiParseResult> MiBeacon::parse_xiaomi_header(const esp32_ble_tracke
     return {};
   }
   auto raw = service_data.data;
+  // 修复：官方 xiaomi_ble 同样先校验最短长度，否则 raw[0..4] / raw[11] 会越界读。
+  if (raw.size() < 5) {
+    ESP_LOGV(TAG, "parse_xiaomi_header(): service data too short (%d).", (int) raw.size());
+    return {};
+  }
   result.has_data = (raw[0] & 0x40) ? true : false;
   result.has_capability = (raw[0] & 0x20) ? true : false;
   result.has_encryption = (raw[0] & 0x08) ? true : false;
@@ -316,10 +322,10 @@ optional<XiaomiParseResult> MiBeacon::parse_xiaomi_header(const esp32_ble_tracke
   result.has_io_capability = false;
 
   if(result.has_capability) {
-    if(result.has_mac) {
-      result.has_io_capability = (raw[5 + 6] & 0x20) ? true : false;
-    }else{
-      result.has_io_capability = (raw[5] & 0x20) ? true : false;
+    // capability 字节位置：有 MAC 时在 raw[11]，否则 raw[5]；两者都要防越界。
+    const size_t capability_index = result.has_mac ? 11 : 5;
+    if (raw.size() > capability_index) {
+      result.has_io_capability = (raw[capability_index] & 0x20) ? true : false;
     }
   }
 
@@ -330,13 +336,13 @@ optional<XiaomiParseResult> MiBeacon::parse_xiaomi_header(const esp32_ble_tracke
     return {};
   }
 
-  static uint8_t last_frame_count = 0;
-  if (last_frame_count == raw[4]) {
-    ESP_LOGV(TAG, "parse_xiaomi_header(): duplicate data packet received (%d).", static_cast<int>(last_frame_count));
+  // 修复：改为实例成员，避免多个门锁实例共享同一去重计数器而互相误杀帧。
+  if (this->last_frame_count_ == raw[4]) {
+    ESP_LOGV(TAG, "parse_xiaomi_header(): duplicate data packet received (%d).", static_cast<int>(this->last_frame_count_));
     result.is_duplicate = true;
     return {};
   }
-  last_frame_count = raw[4];
+  this->last_frame_count_ = raw[4];
   result.is_duplicate = false;
 
   ESP_LOGD(TAG, "Packet : %s", format_hex_pretty(raw.data(), raw.size()).c_str());
@@ -411,9 +417,8 @@ bool MiBeacon::parse_xiaomi_value(uint8_t value_type, const uint8_t *data, uint8
 }
 
 bool MiBeacon::parse_xiaomi_message(const std::vector<uint8_t> &message, XiaomiParseResult &result) {
-  bool encryption_flag = (message[0] & 0x08) ? true : false;
-  if (encryption_flag) {
-    ESP_LOGD(TAG, "parse_xiaomi_message(): payload is encrypted, stop reading message.");
+  if (message.empty() || (message[0] & 0x08)) {
+    ESP_LOGD(TAG, "parse_xiaomi_message(): payload is empty or still encrypted, stop reading message.");
     return false;
   }
 
@@ -422,42 +427,47 @@ bool MiBeacon::parse_xiaomi_message(const std::vector<uint8_t> &message, XiaomiP
   // Byte 1: fixed 0x10
   // Byte 2: length
   // Byte 3..3+len-1: data point value
-  uint8_t *payload=nullptr;
-  uint8_t payload_offset = 0;
-  uint8_t payload_length=0;
 
-  payload_offset += 5;
+  // 修复：偏移与长度全部改用 size_t，避免 uint8_t 连减下溢成 200+ 后绕过检查。
+  size_t payload_offset = 5;
   payload_offset += result.has_mac ? 6 : 0;
   payload_offset += result.has_capability ? 1 : 0;
   payload_offset += result.has_io_capability ? 2 : 0;
 
-  payload = (uint8_t*) message.data() + payload_offset;
-
-  payload_length = message.size() - 5;
-  payload_length -= result.has_mac ? 6 : 0;
-  payload_length -= result.has_capability ? 1 : 0;
-  payload_length -= result.has_io_capability ? 2 : 0;
-  payload_length -= result.has_encryption ? 7 : 0;
-
-  bool success = false;
-
-  if (payload_length < 4) {
-    ESP_LOGD(TAG, "parse_xiaomi_message(): payload has wrong size (%d)!", payload_length);
+  // 修复：解密后 payload 里的 7 字节尾部（tag+counter）仍在 message 中，需扣除；
+  // 用有符号中间量防止减成负数。
+  size_t trailer = result.has_encryption ? 7 : 0;
+  if (payload_offset >= message.size() || (message.size() - payload_offset) <= trailer) {
+    ESP_LOGD(TAG, "parse_xiaomi_message(): payload offset/length out of range "
+                  "(offset=%d, trailer=%d, size=%d)!",
+             (int) payload_offset, (int) trailer, (int) message.size());
     return false;
   }
 
-  const uint8_t value_length = payload[2];
-  ESP_LOGD(TAG, "value_length:%i;payload_length:%i",value_length,payload_length);
-  if ((value_length < 1) || (payload_length < (3 + value_length))) {
-    ESP_LOGD(TAG, "parse_xiaomi_message(): value has wrong size (%d)!", value_length);
-    ESP_LOGD(TAG, "payload[0~3]%02X%02X%02X%02X",payload[0],payload[1],payload[2],payload[3]);
+  size_t payload_length = message.size() - payload_offset - trailer;
+  const uint8_t *payload = message.data() + payload_offset;
+
+  bool success = false;
+
+  // 修复：一帧 MiBeacon 可能含多个 object，原实现只解析第一个；改为 while 逐段解析。
+  // 同时把「长度非法只打日志不退出」改成 break，避免读越界的 value。
+  while (payload_length >= 3) {
+    const uint8_t value_length = payload[2];
+    if ((value_length < 1) || (payload_length < (3 + value_length))) {
+      ESP_LOGD(TAG, "parse_xiaomi_message(): value has wrong size (%d)!", value_length);
+      ESP_LOGD(TAG, "payload head: %s",
+               format_hex_pretty(payload, payload_length < 4 ? payload_length : 4).c_str());
+      break;
+    }
+
+    const uint8_t value_type = payload[0];
+    const uint8_t *data = &payload[3];
+    if (parse_xiaomi_value(value_type, data, value_length, result))
+      success = true;
+
+    payload_length -= 3 + value_length;
+    payload += 3 + value_length;
   }
-
-  const uint8_t value_type = payload[0];
-  const uint8_t *data = &payload[3];
-
-  if (parse_xiaomi_value(value_type, data, value_length, result))
-    success = true;
 
   return success;
 }
