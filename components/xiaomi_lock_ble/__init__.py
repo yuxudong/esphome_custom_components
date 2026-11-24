@@ -66,7 +66,45 @@ CONFIG_SCHEMA = (
 )
 
 
+def _ensure_mbedtls_features() -> None:
+    """在 codegen 阶段声明本组件直接用到的 mbedTLS 模块。
+
+    ESPHome 2026.10 起把 ``CONFIG_MBEDTLS_CCM_C`` 归入 "TLS extras" 并由
+    ``_reconcile_mbedtls_sdkconfig()`` 默认设为 false（理由是省 ~10KB flash）。
+    但本组件在 TLS 之外直接使用 AES-CCM（登录确认帧 MIC / 0x1001 开锁帧），
+    不声明就会在链接期报 ``undefined reference to mbedtls_ccm_init`` 等一串符号。
+    P-256 ECDH 用到的 ``CONFIG_MBEDTLS_ECP_C`` 同理（BLE 栈目前会替我们打开，
+    但显式声明可避免将来 BLE 侧 Kconfig 变化时突然失效）。
+
+    两个 helper 都是 2026.10 引入的；旧版 ESPHome 没有这些 helper，也没有
+    对应的裁剪逻辑，导入失败时静默跳过即可。用户若在 YAML 的
+    ``sdkconfig_options`` 里显式设置，set_idf_sdkconfig_default 不会覆盖。
+    """
+    try:
+        from esphome.components.esp32 import require_mbedtls_tls_extras
+
+        require_mbedtls_tls_extras(["CONFIG_MBEDTLS_CCM_C"])
+    except ImportError:
+        pass
+    try:
+        from esphome.components.esp32 import require_mbedtls_ecp
+
+        require_mbedtls_ecp()
+    except ImportError:
+        pass
+    try:
+        from esphome.components.esp32 import set_idf_sdkconfig_default
+
+        # 兜底：require 只保证"不被关"，这里确保显式为 y（用户配置优先）。
+        set_idf_sdkconfig_default("CONFIG_MBEDTLS_CCM_C", True)
+        set_idf_sdkconfig_default("CONFIG_MBEDTLS_ECP_C", True)
+    except ImportError:
+        pass
+
+
 async def to_code(config):
+    _ensure_mbedtls_features()
+
     var = await lock_component.new_lock(config)
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
