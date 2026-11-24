@@ -15,9 +15,12 @@
 #include "mbedtls/bignum.h"
 
 // ESP-IDF 的 esp_random() 是硬件真随机源；mbedtls RNG 回调签名为 0=成功。
-#include "esp_system.h"
+// 注意：esp_fill_random() 在部分 IDF 版本/组件配置下未导出，直接逐字节用
+// esp_random() 填充，跨 IDF 4.x/5.x 都可用。
+#include "esp_random.h"
 static int esp_mbedtls_rng(void *ctx, uint8_t *buf, size_t len) {
-  esp_fill_random(buf, len);
+  for (size_t i = 0; i < len; i++)
+    buf[i] = (uint8_t) esp_random();
   return 0;
 }
 
@@ -59,11 +62,10 @@ bool ecdh_p256_generate(uint8_t priv32[32], uint8_t pub64[64]) {
 
 bool ecdh_p256_shared(const uint8_t priv32[32], const uint8_t dev_pub64[64], uint8_t shared32[32]) {
   mbedtls_ecp_group grp;
-  mbedtls_mpi d, z;
+  mbedtls_mpi d;
   mbedtls_ecp_point Q, P;
   mbedtls_ecp_group_init(&grp);
   mbedtls_mpi_init(&d);
-  mbedtls_mpi_init(&z);
   mbedtls_ecp_point_init(&Q);
   mbedtls_ecp_point_init(&P);
   bool ok = false;
@@ -78,16 +80,23 @@ bool ecdh_p256_shared(const uint8_t priv32[32], const uint8_t dev_pub64[64], uin
     memcpy(point + 1, dev_pub64, 64);
     if (mbedtls_ecp_point_read_binary(&grp, &Q, point, sizeof(point)) != 0)
       break;
-    // 共享点 P = d*Q，其 X 坐标即 ECDH 共享密钥（32B 大端）
+    // 共享点 P = d*Q，其 X 坐标即 ECDH 共享密钥（32B 大端）。
+    // 不直接访问 P.X：mbedTLS 3.x 把结构体成员改成 MBEDTLS_PRIVATE(X)，
+    // 直接用 P.X 在 ESP-IDF 5.x（mbedTLS 3.x）上编译失败。改用公开的
+    // point_write_binary 序列化成 0x04||X||Y，再取 X，2.x/3.x 都兼容。
     if (mbedtls_ecp_mul(&grp, &P, &d, &Q, esp_mbedtls_rng, nullptr) != 0)
       break;
-    if (mbedtls_mpi_write_binary(&P.X, shared32, 32) != 0)
+    uint8_t point_out[65];
+    size_t olen = 0;
+    if (mbedtls_ecp_point_write_binary(&grp, &P, MBEDTLS_ECP_PF_UNCOMPRESSED,
+                                       &olen, point_out, sizeof(point_out)) != 0 ||
+        olen != 65)
       break;
+    memcpy(shared32, point_out + 1, 32);
     ok = true;
   } while (0);
   mbedtls_ecp_point_free(&P);
   mbedtls_ecp_point_free(&Q);
-  mbedtls_mpi_free(&z);
   mbedtls_mpi_free(&d);
   mbedtls_ecp_group_free(&grp);
   return ok;

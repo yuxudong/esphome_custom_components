@@ -25,10 +25,11 @@ using xiaomi_lock::make_lock_frame;
 using xiaomi_lock::make_login_confirm;
 using xiaomi_lock::parse_lock_frame;
 
-// 128-bit 服务 UUID：由字符串直接构造（from_raw 内部处理小端）
-static const espbt::ESPBTUUID UUID_MI_SERVICE =
+// 128-bit 服务 UUID：由字符串直接构造（from_raw 内部处理小端）。
+// 名字加 BLE_UUID_ 前缀，避免与 mi_lock_crypto.h 里同名的 char* 常量冲突。
+static const espbt::ESPBTUUID BLE_UUID_MI_SERVICE =
     espbt::ESPBTUUID::from_raw("0000fe95-0000-1000-8000-00805f9b34fb");
-static const espbt::ESPBTUUID UUID_LOCK_SERVICE =
+static const espbt::ESPBTUUID BLE_UUID_LOCK_SERVICE =
     espbt::ESPBTUUID::from_raw("00001000-0065-6c62-2e74-6f696d2e696d");
 
 static const char *phase_name(AuthPhase p) {
@@ -55,14 +56,16 @@ void XiaomiLockBle::setup() {
   this->traits.set_supports_open(true);      // open() = 开锁（cmd=0）
   this->load_counter_();
   ESP_LOGCONFIG(TAG, "XiaomiLockBle 已初始化（计数器 %u/%u，settle=%ums，step=%ums）",
-                this->ctr_lo_, this->ctr_hi_, this->settle_ms_, this->step_timeout_ms_);
+                (unsigned) this->ctr_lo_, (unsigned) this->ctr_hi_,
+                (unsigned) this->settle_ms_, (unsigned) this->step_timeout_ms_);
 }
 
 void XiaomiLockBle::dump_config() {
   ESP_LOGCONFIG(TAG, "XiaomiLockBle:");
   LOG_LOCK("", "XiaomiLockBle", this);
   ESP_LOGCONFIG(TAG, "  LTMK: %s", this->ltmk_valid_ ? "已配置(32B, 未打印)" : "未配置/无效");
-  ESP_LOGCONFIG(TAG, "  计数器(NVS): %u/%u  按钮命令: %u", this->ctr_lo_, this->ctr_hi_, this->cmd_);
+  ESP_LOGCONFIG(TAG, "  计数器(NVS): %u/%u  按钮命令: %u",
+                (unsigned) this->ctr_lo_, (unsigned) this->ctr_hi_, (unsigned) this->cmd_);
 }
 
 void XiaomiLockBle::set_ltmk(const std::string &hex) {
@@ -133,16 +136,16 @@ void XiaomiLockBle::request_connect_() {
 
 void XiaomiLockBle::on_search_complete_() {
   // 解析 FE95 服务的 3 个特征 + 自定义锁服务的 3 个特征
-  this->h_version_ = this->find_char_handle_(UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0004));
-  this->h_cmd_ = this->find_char_handle_(UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0010));
-  this->h_channel_ = this->find_char_handle_(UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0016));
-  this->h_lock_write_ = this->find_char_handle_(UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1001));
-  this->h_state_ = this->find_char_handle_(UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1002));
-  this->h_log_ = this->find_char_handle_(UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1003));
+  this->h_version_ = this->find_char_handle_(BLE_UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0004));
+  this->h_cmd_ = this->find_char_handle_(BLE_UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0010));
+  this->h_channel_ = this->find_char_handle_(BLE_UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0016));
+  this->h_lock_write_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1001));
+  this->h_state_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1002));
+  this->h_log_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1003));
 
   ESP_LOGI(TAG, "GATT 特征: 0x0004=%u 0x0010=%u 0x0016=%u 0x1001=%u 0x1002=%u 0x1003=%u",
-           this->h_version_, this->h_cmd_, this->h_channel_,
-           this->h_lock_write_, this->h_state_, this->h_log_);
+           (unsigned) this->h_version_, (unsigned) this->h_cmd_, (unsigned) this->h_channel_,
+           (unsigned) this->h_lock_write_, (unsigned) this->h_state_, (unsigned) this->h_log_);
 
   if (this->h_cmd_ == 0 || this->h_channel_ == 0 || this->h_lock_write_ == 0) {
     this->fail_("关键特征未找到");
@@ -217,9 +220,11 @@ void XiaomiLockBle::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
                                         esp_ble_gattc_cb_param_t *param) {
   switch (event) {
     case ESP_GATTC_SEARCH_CMPL_EVT:
-      // 告诉父组件不再需要读取 GATT 缓存，可释放内存
-      this->node_state = espbt::ClientState::ESTABLISHED;
+      // 先解析特征并注册 notify；父组件会等 register_for_notify 真正完成后
+      // 才释放 GATT 缓存。所有节点都 ESTABLISHED 后它才会释放，因此这里
+      // 必须在 on_search_complete_() 之后再置 ESTABLISHED。
       this->on_search_complete_();
+      this->node_state = espbt::ClientState::ESTABLISHED;
       break;
 
     case ESP_GATTC_WRITE_CHAR_EVT:
@@ -335,7 +340,7 @@ void XiaomiLockBle::on_channel_notify_(const uint8_t *data, size_t len) {
       this->rx_chunks_.clear();
       this->rx_ready_ = true;
       this->send_ack_(CH_STATUS_COMPLETE);  // 收齐回 ACK(0)
-      ESP_LOGI(TAG, "0x0016 重组完成 msgType=%u payload=%uB", this->rx_msg_type_, (unsigned) this->rx_payload_.size());
+      ESP_LOGI(TAG, "0x0016 重组完成 msgType=%u payload=%uB", (unsigned) this->rx_msg_type_, (unsigned) this->rx_payload_.size());
     }
     return;
   }
@@ -356,7 +361,7 @@ void XiaomiLockBle::on_channel_notify_(const uint8_t *data, size_t len) {
     this->rx_ready_ = false;
     this->rx_started_ms_ = millis();
     this->send_ack_(CH_STATUS_READY);  // ★ 回 01，不是 packageType
-    ESP_LOGI(TAG, "0x0016 收到 CTR msgType=%u frames=%u → ACK(1)", val, frame_count);
+    ESP_LOGI(TAG, "0x0016 收到 CTR msgType=%u frames=%u → ACK(1)", (unsigned) val, (unsigned) frame_count);
   } else if (opcode == 1) {
     // ACK：00 00 01 <status> [missing…]
     std::vector<uint16_t> missing;
@@ -367,7 +372,7 @@ void XiaomiLockBle::on_channel_notify_(const uint8_t *data, size_t len) {
 }
 
 void XiaomiLockBle::on_channel_ack_(uint8_t status, const std::vector<uint16_t> &missing) {
-  ESP_LOGI(TAG, "0x0016 收到 ACK status=%u（%s）", status,
+  ESP_LOGI(TAG, "0x0016 收到 ACK status=%u（%s）", (unsigned) status,
            status == CH_STATUS_READY ? "READY" : status == CH_STATUS_COMPLETE ? "COMPLETE" :
            status == CH_STATUS_RETRANS ? "RETRANS" : "未知");
 
@@ -426,7 +431,7 @@ void XiaomiLockBle::start_channel_tx_(uint8_t msg_type, const std::vector<uint8_
   this->tx_done_ = false;
   this->tx_failed_ = false;
   this->tx_phase_ = TxPhase::IDLE;
-  ESP_LOGI(TAG, "0x0016 发送 msgType=%u payload=%uB 分 %u 片", msg_type,
+  ESP_LOGI(TAG, "0x0016 发送 msgType=%u payload=%uB 分 %u 片", (unsigned) msg_type,
            (unsigned) payload.size(), (unsigned) this->tx_chunks_.size());
   this->send_channel_ctr_();
 }
@@ -497,7 +502,7 @@ void XiaomiLockBle::load_counter_() {
   if (this->has_ctr_override_) {
     this->ctr_lo_ = this->ctr_override_lo_;
     this->ctr_hi_ = this->ctr_override_hi_;
-    ESP_LOGI(TAG, "计数器被显式覆盖为 %u/%u", this->ctr_lo_, this->ctr_hi_);
+    ESP_LOGI(TAG, "计数器被显式覆盖为 %u/%u", (unsigned) this->ctr_lo_, (unsigned) this->ctr_hi_);
   }
 }
 
@@ -506,12 +511,13 @@ void XiaomiLockBle::save_counter_() {
   if (this->ctr_lo_ == 0) this->ctr_hi_++;
   uint32_t packed = ((uint32_t) this->ctr_hi_ << 16) | this->ctr_lo_;
   this->ctr_pref_.save(&packed);
-  ESP_LOGI(TAG, "计数器已提交 %u/%u（写帧前预占）", this->ctr_lo_, this->ctr_hi_);
+  ESP_LOGI(TAG, "计数器已提交 %u/%u（写帧前预占）", (unsigned) this->ctr_lo_, (unsigned) this->ctr_hi_);
 }
 
 // ======================= 工具 =======================
 
 uint16_t XiaomiLockBle::find_char_handle_(espbt::ESPBTUUID service, espbt::ESPBTUUID chr) {
+#ifdef USE_ESP32_BLE_DEVICE
   auto *c = this->parent()->get_characteristic(service, chr);
   if (c == nullptr) {
     char sb[espbt::UUID_STR_LEN], cb[espbt::UUID_STR_LEN];
@@ -519,6 +525,10 @@ uint16_t XiaomiLockBle::find_char_handle_(espbt::ESPBTUUID service, espbt::ESPBT
     return 0;
   }
   return c->handle;
+#else
+  ESP_LOGE(TAG, "当前构建未启用 USE_ESP32_BLE_DEVICE，无法解析 GATT 特征");
+  return 0;
+#endif
 }
 
 bool XiaomiLockBle::phase_expired_() const {
@@ -634,7 +644,7 @@ void XiaomiLockBle::loop() {
           break;
         }
         ESP_LOGI(TAG, "Step8 写 0x1001 开锁帧 %s (cmd=%u ctr=%u/%u)",
-                 format_hex_pretty(frame).c_str(), this->cmd_, this->ctr_lo_, this->ctr_hi_);
+                 format_hex_pretty(frame).c_str(), (unsigned) this->cmd_, (unsigned) this->ctr_lo_, (unsigned) this->ctr_hi_);
         this->queue_write_(this->h_lock_write_, frame, true);
         this->set_phase_(AuthPhase::COLLECT_STATE, 3000);
       }
@@ -645,6 +655,7 @@ void XiaomiLockBle::loop() {
       if (this->phase_expired_()) this->finish_ok_();
       break;
 
+    case AuthPhase::UNLOCK_WRITE:  // 保留阶段；实际写在 WAIT_RESULT 里完成
     case AuthPhase::START_CMD:
     case AuthPhase::DONE:
     case AuthPhase::FAILED:

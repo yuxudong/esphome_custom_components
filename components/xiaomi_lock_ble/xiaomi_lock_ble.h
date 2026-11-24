@@ -48,7 +48,9 @@
 namespace esphome {
 namespace xiaomi_lock_ble {
 
-using espbt = esphome::esp32_ble_tracker;
+// 新版 ESPHome 里 esp32_ble_tracker 是 namespace（不是类），必须用 namespace 别名；
+// 旧写法 `using espbt = esphome::esp32_ble_tracker;` 会把 namespace 当类型用而编译失败。
+namespace espbt = esphome::esp32_ble_tracker;
 
 // 一轮完整开锁的最长时限；各子阶段另有独立 deadline。
 static constexpr uint32_t DEFAULT_STEP_TIMEOUT_MS = 12000;
