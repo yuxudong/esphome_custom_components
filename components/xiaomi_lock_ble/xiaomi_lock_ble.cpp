@@ -186,6 +186,7 @@ void XiaomiLockBle::on_disconnected_() {
   this->write_in_flight_ = false;
   this->tx_phase_ = TxPhase::IDLE;
   this->tx_chunks_.clear();
+  this->tx_ctr_sent_ms_ = 0;
   this->rx_active_ = false;
   this->rx_chunks_.clear();
   this->rx_ready_ = false;
@@ -451,11 +452,15 @@ void XiaomiLockBle::start_channel_tx_(uint8_t msg_type, const std::vector<uint8_
 }
 
 void XiaomiLockBle::send_channel_ctr_() {
-  // CTR = 00 00 <msgType> <frameCount:u16LE>（4B 头，seq=0 表示控制帧）
-  std::vector<uint8_t> b = {0x00, 0x00, this->tx_msg_type_,
+  // ★ CTR = 00 00 | 00(opcode=CTR) | packageType | frameCount(u16LE) = 6B
+  // 真机日志（PC 脚本跑通）：TX 000000030400 → RX 00000101。
+  // 之前漏写 opcode=00 发成 5B（00 00 03 04 00），设备把 data[2]=packageType
+  // 当 opcode=3（single_ack），当未知/无关包丢弃 → 永不回 ACK → 阶段超时。
+  std::vector<uint8_t> b = {0x00, 0x00, 0x00, this->tx_msg_type_,
                             (uint8_t) (this->tx_chunks_.size() & 0xFF),
                             (uint8_t) (this->tx_chunks_.size() >> 8)};
   this->tx_phase_ = TxPhase::WAIT_CTR_ACK;
+  this->tx_ctr_sent_ms_ = millis();
   this->queue_write_(this->h_channel_, b, false);
 }
 
@@ -559,6 +564,18 @@ void XiaomiLockBle::set_phase_(AuthPhase phase, uint32_t timeout_ms) {
 
 void XiaomiLockBle::loop() {
   this->pump_tx_();
+
+  // CTR 发出后若超时未收到 ACK(READY)，按 PC 脚本 ctr_retries 语义重发，
+  // 避免偶发丢包直接让整轮失败（真机 Python 侧也靠这个兜底）。
+  if (this->tx_phase_ == TxPhase::WAIT_CTR_ACK && this->tx_ctr_sent_ms_ != 0 &&
+      millis() - this->tx_ctr_sent_ms_ > this->step_timeout_ms_ / 4) {
+    if (++this->tx_ctr_retry_ <= 3) {
+      ESP_LOGW(TAG, "0x0016 CTR 等待 ACK 超时，重发（第 %u 次）", (unsigned) this->tx_ctr_retry_);
+      this->send_channel_ctr_();
+    } else {
+      this->tx_failed_ = true;
+    }
+  }
 
   // 0x0016 设备公钥重组超时：主动请求重传缺失片
   if (this->rx_active_ && millis() - this->rx_started_ms_ > this->step_timeout_ms_) {

@@ -190,6 +190,7 @@ class XiaomiLockBle final : public Component,
   uint8_t tx_msg_type_{0};
   std::vector<std::vector<uint8_t>> tx_chunks_;
   uint8_t tx_ctr_retry_{0};
+  uint32_t tx_ctr_sent_ms_{0};  // 最近一次 CTR 发出时刻，用于 ACK 超时重发
   uint8_t tx_data_retry_{0};
   bool tx_done_{false};
   bool tx_failed_{false};
