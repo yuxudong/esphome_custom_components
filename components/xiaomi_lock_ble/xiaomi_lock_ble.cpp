@@ -31,6 +31,16 @@ static const espbt::ESPBTUUID BLE_UUID_MI_SERVICE =
     espbt::ESPBTUUID::from_raw("0000fe95-0000-1000-8000-00805f9b34fb");
 static const espbt::ESPBTUUID BLE_UUID_LOCK_SERVICE =
     espbt::ESPBTUUID::from_raw("00001000-0065-6c62-2e74-6f696d2e696d");
+// ★ 门锁三个特征用的是 Xiaomi 自定义 128-bit base（…0065-6c62-2e74-6f696d2e696d），
+//   不是标准 Bluetooth base。用 from_uint16(0x1001) 会得到
+//   00001001-0000-1000-8000-00805f9b34fb，和真机 GATT 表匹配不上（2026-11-26 实机证实）。
+//   PC 端 verify_crypto.py 用的就是下面这组完整 128-bit UUID，必须照抄。
+static const espbt::ESPBTUUID BLE_UUID_LOCK_WRITE =
+    espbt::ESPBTUUID::from_raw("00001001-0065-6c62-2e74-6f696d2e696d");
+static const espbt::ESPBTUUID BLE_UUID_LOCK_STATE =
+    espbt::ESPBTUUID::from_raw("00001002-0065-6c62-2e74-6f696d2e696d");
+static const espbt::ESPBTUUID BLE_UUID_LOCK_LOG =
+    espbt::ESPBTUUID::from_raw("00001003-0065-6c62-2e74-6f696d2e696d");
 
 static const char *phase_name(AuthPhase p) {
   switch (p) {
@@ -139,9 +149,10 @@ void XiaomiLockBle::on_search_complete_() {
   this->h_version_ = this->find_char_handle_(BLE_UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0004));
   this->h_cmd_ = this->find_char_handle_(BLE_UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0010));
   this->h_channel_ = this->find_char_handle_(BLE_UUID_MI_SERVICE, espbt::ESPBTUUID::from_uint16(0x0016));
-  this->h_lock_write_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1001));
-  this->h_state_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1002));
-  this->h_log_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, espbt::ESPBTUUID::from_uint16(0x1003));
+  // ★ 门锁服务三个特征用完整 128-bit Xiaomi base UUID，不能用 from_uint16
+  this->h_lock_write_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, BLE_UUID_LOCK_WRITE);
+  this->h_state_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, BLE_UUID_LOCK_STATE);
+  this->h_log_ = this->find_char_handle_(BLE_UUID_LOCK_SERVICE, BLE_UUID_LOCK_LOG);
 
   ESP_LOGI(TAG, "GATT 特征: 0x0004=%u 0x0010=%u 0x0016=%u 0x1001=%u 0x1002=%u 0x1003=%u",
            (unsigned) this->h_version_, (unsigned) this->h_cmd_, (unsigned) this->h_channel_,
@@ -201,7 +212,10 @@ void XiaomiLockBle::fail_(const char *reason) {
   this->phase_ = AuthPhase::FAILED;
   this->pending_unlock_ = false;
   this->publish_state(lock::LOCK_STATE_JAMMED);
-  if (this->parent() != nullptr && this->services_ready_)
+  // ★ 不能只看 services_ready_：特征未找到时它还是 false，disconnect 会被跳过，
+  //   连接残留在 ESTABLISHED → 下次点开锁报 "Connection already in progress"。
+  //   ble_client 自己在 SEARCH_CMPL 后就是 ESTABLISHED，用它的 state 判断才准。
+  if (this->parent() != nullptr && this->parent()->connected())
     this->parent()->disconnect();
 }
 
@@ -210,7 +224,7 @@ void XiaomiLockBle::finish_ok_() {
   this->publish_state(this->target_state_);
   this->phase_ = AuthPhase::DONE;
   this->pending_unlock_ = false;
-  if (this->parent() != nullptr && this->services_ready_)
+  if (this->parent() != nullptr && this->parent()->connected())
     this->parent()->disconnect();
 }
 
